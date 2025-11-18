@@ -563,7 +563,7 @@ impl SerializedValues {
     }
 
     // Gets the serialized values as raw bytes, without the preceding u16 length.
-    pub(crate) fn get_contents(&self) -> &[u8] {
+    pub fn get_contents(&self) -> &[u8] {
         &self.serialized_values
     }
 
