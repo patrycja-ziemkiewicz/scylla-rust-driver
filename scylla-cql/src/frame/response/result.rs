@@ -813,7 +813,7 @@ impl DeserializedMetadataAndRawRows {
         }
     }
 
-    pub(crate) fn into_inner(self) -> (ResultMetadataHolder, usize, Bytes) {
+    pub fn into_inner(self) -> (ResultMetadataHolder, usize, Bytes) {
         (self.metadata, self.rows_count, self.raw_rows)
     }
 
@@ -1674,7 +1674,7 @@ mod test_utils {
         }
     }
 
-    impl DeserializedMetadataAndRawRows {
+impl DeserializedMetadataAndRawRows {
         #[doc(hidden)]
         #[inline]
         pub fn new_for_test(
