@@ -647,6 +647,7 @@ impl PreparedStatement {
         self.config.execution_profile_handle.as_ref()
     }
 
+    #[allow(missing_docs)]
     pub fn serialize_values(
         &self,
         values: &impl SerializeRow,

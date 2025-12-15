@@ -84,7 +84,7 @@ impl<'frame> FrameSlice<'frame> {
     /// the slice into a new-allocation-based Bytes.
     /// This is pub(crate) for the above reason.
     #[inline]
-    pub(crate) fn new_borrowed(frame_subslice: &'frame [u8]) -> Self {
+    pub fn new_borrowed(frame_subslice: &'frame [u8]) -> Self {
         Self {
             frame_subslice,
             original_frame: &EMPTY_BYTES,
