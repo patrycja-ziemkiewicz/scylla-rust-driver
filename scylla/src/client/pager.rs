@@ -205,11 +205,11 @@ impl PagingExecutor {
     ) where
         QueryFunc: Fn(Arc<Connection>, Consistency, PagingState) -> QueryFut,
         QueryFut: Future<Output = Result<QueryResponse, RequestAttemptError>>,
-        SpanCreator: Fn() -> RequestSpan,
+        SpanCreator: Fn(&ClusterState) -> RequestSpan,
     {
         // Iterates over pages until exhaustion or non-retriable error.
         loop {
-            let page_span = span_creator();
+            let page_span = span_creator(&self.cluster_state);
 
             let page_res = self
                 .fetch_one_page(&routing_info, &page_span, &page_query)
@@ -907,7 +907,7 @@ If you are using this API, you are probably doing something wrong."
                                 .await
                         };
 
-                    let span_creator = move || create_span(&statement_ref.contents);
+                    let span_creator = move |_: &ClusterState| create_span(&statement_ref.contents);
 
                     executor
                         .query_remaining_pages(sender, page_query, routing_info, span_creator)
@@ -936,6 +936,7 @@ If you are using this API, you are probably doing something wrong."
             partition_key: &Option<PartitionKey>,
             token: Option<Token>,
             serialized_values_size: usize,
+            _cluster_state: &ClusterState,
             replicas: Option<&Replicas>,
         ) -> RequestSpan {
             let span = RequestSpan::new_prepared(
@@ -1007,6 +1008,7 @@ If you are using this API, you are probably doing something wrong."
             &partition_key,
             token,
             serialized_values_size,
+            &executor.cluster_state,
             replicas.as_ref(),
         );
 
@@ -1074,11 +1076,12 @@ If you are using this API, you are probably doing something wrong."
                                 .await
                         };
 
-                    let span_creator = move || {
+                    let span_creator = move |cluster_state: &ClusterState| {
                         create_span(
                             &partition_key,
                             token,
                             serialized_values_size,
+                            cluster_state,
                             replicas.as_ref(),
                         )
                     };
