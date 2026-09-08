@@ -2,6 +2,7 @@
 //! They enable consuming result of a paged query as a stream over rows,
 //! which abstracts over page boundaries.
 
+use std::cell::OnceCell;
 use std::future::Future;
 use std::ops::ControlFlow;
 use std::pin::Pin;
@@ -31,7 +32,9 @@ use crate::frame::frame_errors::ResultMetadataAndRowsCountParseError;
 use crate::frame::request::query::{PagingState, PagingStateResponse};
 use crate::frame::response::NonErrorResponseWithDeserializedMetadataV2 as NonErrorResponseWithDeserializedMetadata;
 use crate::frame::response::result;
-use crate::frame::response::result::{DeserializedMetadataAndRawRows, SchemaChange, SetKeyspace};
+use crate::frame::response::result::{
+    DeserializedMetadataAndRawRows, SchemaChange, SetKeyspace, TableSpec,
+};
 use crate::frame::types::{Consistency, SerialConsistency};
 use crate::network::Connection;
 use crate::observability::driver_tracing::RequestSpan;
@@ -205,11 +208,11 @@ impl PagingExecutor {
     ) where
         QueryFunc: Fn(Arc<Connection>, Consistency, PagingState) -> QueryFut,
         QueryFut: Future<Output = Result<QueryResponse, RequestAttemptError>>,
-        SpanCreator: Fn() -> RequestSpan,
+        SpanCreator: Fn(&ClusterState) -> RequestSpan,
     {
         // Iterates over pages until exhaustion or non-retriable error.
         loop {
-            let page_span = span_creator();
+            let page_span = span_creator(&self.cluster_state);
 
             let page_res = self
                 .fetch_one_page(&routing_info, &page_span, &page_query)
@@ -907,7 +910,7 @@ If you are using this API, you are probably doing something wrong."
                                 .await
                         };
 
-                    let span_creator = move || create_span(&statement_ref.contents);
+                    let span_creator = move |_: &ClusterState| create_span(&statement_ref.contents);
 
                     executor
                         .query_remaining_pages(sender, page_query, routing_info, span_creator)
@@ -936,14 +939,27 @@ If you are using this API, you are probably doing something wrong."
             partition_key: &Option<PartitionKey>,
             token: Option<Token>,
             serialized_values_size: usize,
-            replicas: Option<&Replicas>,
+            cluster_state: &ClusterState,
+            table_spec: Option<&TableSpec<'_>>,
+            replicas: &OnceCell<Replicas>,
         ) -> RequestSpan {
             let span = RequestSpan::new_prepared(
                 partition_key.as_ref().map(|pk| pk.iter()),
                 token,
                 serialized_values_size,
             );
-            if let Some(replicas) = replicas {
+            if !span.span().is_disabled()
+                && let (Some(table_spec), Some(token)) = (table_spec, token)
+            {
+                // Replicas are costly to compute, so we only do it if some page's span is
+                // enabled, and then at most once for the whole paged request: `cluster_state`
+                // is a fixed snapshot, so the replica set cannot change between pages.
+                let replicas = replicas.get_or_init(|| {
+                    cluster_state
+                        .get_token_endpoints_iter(table_spec, token)
+                        .map(|(node, shard)| (node.clone(), shard))
+                        .collect()
+                });
                 span.record_replicas(replicas.iter().map(|(node, shard)| (node, *shard)));
             }
             span
@@ -994,20 +1010,17 @@ If you are using this API, you are probably doing something wrong."
 
         let serialized_values_size = values.buffer_size();
 
-        let replicas: Option<Replicas> =
-            Option::zip(routing_info.table, routing_info.token).map(|(table_spec, token)| {
-                executor
-                    .cluster_state
-                    .get_token_endpoints_iter(table_spec, token)
-                    .map(|(node, shard)| (node.clone(), shard))
-                    .collect()
-            });
+        // Shared by the first page and every remaining page, so that the replica set is
+        // computed at most once - and only if at least one of those spans is enabled.
+        let replicas: OnceCell<Replicas> = OnceCell::new();
 
         let request_span = create_span(
             &partition_key,
             token,
             serialized_values_size,
-            replicas.as_ref(),
+            &executor.cluster_state,
+            table_spec,
+            &replicas,
         );
 
         let (first_page, should_fetch_more_pages) = executor
@@ -1074,12 +1087,14 @@ If you are using this API, you are probably doing something wrong."
                                 .await
                         };
 
-                    let span_creator = move || {
+                    let span_creator = move |cluster_state: &ClusterState| {
                         create_span(
                             &partition_key,
                             token,
                             serialized_values_size,
-                            replicas.as_ref(),
+                            cluster_state,
+                            table_spec,
+                            &replicas,
                         )
                     };
 
