@@ -23,6 +23,8 @@ pub mod pager;
 
 pub mod client_routes;
 
+pub mod maintenance_mode;
+
 pub mod caching_session;
 
 mod self_identity;
